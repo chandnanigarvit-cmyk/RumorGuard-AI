@@ -1,0 +1,89 @@
+"""Pydantic models + shared exception type."""
+from enum import Enum
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+class AppError(Exception):
+    """Error that maps cleanly to an HTTP response."""
+
+    def __init__(self, message: str, status_code: int = 500):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+
+class Verdict(str, Enum):
+    SUPPORTED = "SUPPORTED"
+    MISLEADING = "MISLEADING"
+    CONTRADICTED = "CONTRADICTED"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+
+
+class ExtractedClaim(BaseModel):
+    claim: str
+    location: Optional[str] = None
+    entity: Optional[str] = None
+    event: Optional[str] = None
+    scope: Optional[str] = None
+    duration: Optional[str] = None
+    date_time: Optional[str] = None
+
+
+class EvidenceItem(BaseModel):
+    """Text copied verbatim from a retrieved official document (never AI-written)."""
+
+    source: str
+    chunk_id: str
+    text: str
+    similarity: float
+
+
+class ClaimDrift(BaseModel):
+    drift_detected: bool = False
+    scope_change: Optional[str] = None
+    location_change: Optional[str] = None
+    duration_change: Optional[str] = None
+    date_time_change: Optional[str] = None
+    context_removed: list[str] = Field(default_factory=list)
+
+
+class VerifyTextRequest(BaseModel):
+    text: str = Field(min_length=3, max_length=5000, examples=["All service centres in the city are closed indefinitely."])
+
+
+class VerifyResponse(BaseModel):
+    verdict: Verdict
+    confidence: int = Field(ge=0, le=100, description="LLM confidence in the verdict; 0 when no evidence was found.")
+    claim: str
+    input_type: str = Field(description="text | image | audio")
+    source_text: str = Field(description="Raw text received, or the OCR / transcript output.")
+    extracted_claim: ExtractedClaim
+    evidence: list[EvidenceItem] = Field(description="Verbatim excerpts from retrieved official documents.")
+    contradictions: list[str] = Field(description="AI-generated analysis.")
+    missing_context: list[str] = Field(description="AI-generated analysis.")
+    claim_drift: ClaimDrift
+    explanation: str = Field(description="AI-generated analysis based only on the evidence.")
+    correction: str = Field(description="AI-generated, moderator-ready correction.")
+    alternatives: list[str]
+    sources: list[str]
+    notes: str = "'evidence' and 'sources' are retrieved from official documents. All other analysis text is AI-generated from that evidence."
+
+
+class DocumentInfo(BaseModel):
+    name: str
+    chunks: int
+    indexed: bool
+    size_bytes: int
+
+
+class DocumentsResponse(BaseModel):
+    count: int
+    documents: list[DocumentInfo]
+
+
+class IngestResult(BaseModel):
+    name: str
+    chunks: int
+    message: str
