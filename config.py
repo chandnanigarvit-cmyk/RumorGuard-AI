@@ -26,8 +26,8 @@ def _float(name: str, default: float) -> float:
 @dataclass(frozen=True)
 class Settings:
     # LLM
-    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
-    llm_model: str = os.getenv("LLM_MODEL", "claude-sonnet-5-5")
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    llm_model: str = os.getenv("LLM_MODEL", "gemini-3.5-flash")
     llm_max_tokens: int = _int("LLM_MAX_TOKENS", 1500)
 
     # Paths
