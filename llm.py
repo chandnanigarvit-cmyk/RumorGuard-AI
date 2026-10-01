@@ -1,4 +1,4 @@
-""""Async wrapper around the Google Gemini API."""
+"""Async wrapper around the Google Gemini API."""
 import json
 import logging
 import re
