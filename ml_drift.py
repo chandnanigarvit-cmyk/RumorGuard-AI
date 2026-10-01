@@ -1,14 +1,23 @@
 """
 Lightweight ML model for claim-drift detection.
 
-Uses TF-IDF + Logistic Regression.
-The model is intentionally small so it can run on a
-512 MB Render instance.
+The model compares an official claim with a rumor claim.
+
+Architecture:
+    Official claim + Rumor claim
+              ↓
+        TF-IDF features
+              ↓
+    Logistic Regression
+              ↓
+    Scope / Duration / Location / Context drift scores
+
+This is a prototype model trained on curated examples.
+It is intentionally lightweight for low-memory deployment.
 """
 
 from __future__ import annotations
 
-import re
 from typing import Dict
 
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -16,55 +25,251 @@ from sklearn.linear_model import LogisticRegression
 
 
 # ----------------------------------------------------------------------------- #
-# Curated prototype training data
+# Prototype paired training data
 # ----------------------------------------------------------------------------- #
+#
+# Format:
+# (official_statement, rumor_statement, label)
+#
+# label = 1 → drift exists
+# label = 0 → no drift
+#
 
-TRAINING_DATA = [
-    # NORMAL / NO DRIFT
-    ("Central branch is temporarily closed until 12 PM.", "normal"),
-    ("The Central Service Branch will reopen at 12 PM.", "normal"),
-    ("Central branch is closed from 8 AM to 12 PM.", "normal"),
-    ("Other service branches remain operational.", "normal"),
-    ("The branch is temporarily unavailable due to maintenance.", "normal"),
+TRAINING_DATA = {
+    "scope": [
+        # Drift
+        (
+            "Central Service Branch is temporarily closed.",
+            "All service branches in the city are closed.",
+            1,
+        ),
+        (
+            "Only the Central Branch is affected.",
+            "Every branch in the city is affected.",
+            1,
+        ),
+        (
+            "The Central Service Branch is closed.",
+            "All service centres are closed.",
+            1,
+        ),
+        (
+            "One branch is temporarily unavailable.",
+            "All branches are unavailable.",
+            1,
+        ),
+        (
+            "The closure applies only to Central Branch.",
+            "The closure applies to every branch.",
+            1,
+        ),
 
-    # SCOPE DRIFT
-    ("All branches are closed.", "scope"),
-    ("Every service centre in the city is closed.", "scope"),
-    ("All service centres are unavailable.", "scope"),
-    ("The entire city has no service centres operating.", "scope"),
-    ("Every branch has been shut down.", "scope"),
+        # No drift
+        (
+            "Central Service Branch is temporarily closed.",
+            "Central Service Branch is temporarily closed.",
+            0,
+        ),
+        (
+            "Only the Central Branch is affected.",
+            "Only the Central Branch is affected.",
+            0,
+        ),
+        (
+            "The Central Service Branch is closed.",
+            "The Central Service Branch is closed.",
+            0,
+        ),
+        (
+            "One branch is temporarily unavailable.",
+            "One branch is temporarily unavailable.",
+            0,
+        ),
+        (
+            "The closure applies only to Central Branch.",
+            "The closure applies only to Central Branch.",
+            0,
+        ),
+    ],
 
-    # DURATION DRIFT
-    ("The branch is closed indefinitely.", "duration"),
-    ("The service centre will remain closed permanently.", "duration"),
-    ("The branch will not reopen.", "duration"),
-    ("The service centre is closed until further notice.", "duration"),
-    ("The closure is permanent.", "duration"),
+    "duration": [
+        # Drift
+        (
+            "Central Branch is temporarily closed until 12 PM.",
+            "Central Branch is closed indefinitely.",
+            1,
+        ),
+        (
+            "The branch will reopen at 12 PM.",
+            "The branch will remain closed permanently.",
+            1,
+        ),
+        (
+            "The closure lasts from 8 AM to 12 PM.",
+            "The closure is until further notice.",
+            1,
+        ),
+        (
+            "The service interruption is temporary.",
+            "The service interruption is permanent.",
+            1,
+        ),
+        (
+            "The branch will reopen after maintenance.",
+            "The branch will never reopen.",
+            1,
+        ),
 
-    # LOCATION DRIFT
-    ("Branches across the city are closed.", "location"),
-    ("The whole city is affected by the closure.", "location"),
-    ("All locations in the city are unavailable.", "location"),
-    ("Every location has been affected.", "location"),
-    ("The citywide service is unavailable.", "location"),
+        # No drift
+        (
+            "Central Branch is temporarily closed until 12 PM.",
+            "Central Branch is temporarily closed until 12 PM.",
+            0,
+        ),
+        (
+            "The branch will reopen at 12 PM.",
+            "The branch will reopen at 12 PM.",
+            0,
+        ),
+        (
+            "The closure lasts from 8 AM to 12 PM.",
+            "The closure lasts from 8 AM to 12 PM.",
+            0,
+        ),
+        (
+            "The service interruption is temporary.",
+            "The service interruption is temporary.",
+            0,
+        ),
+        (
+            "The branch will reopen after maintenance.",
+            "The branch will reopen after maintenance.",
+            0,
+        ),
+    ],
 
-    # CONTEXT DRIFT
-    ("The branch is closed.", "context"),
-    ("The service centre is unavailable.", "context"),
-    ("The branch stopped service.", "context"),
-    ("The centre is not operating.", "context"),
-    ("Service has been stopped at the branch.", "context"),
-]
+    "location": [
+        # Drift
+        (
+            "Central Service Branch is temporarily closed.",
+            "All branches across the city are closed.",
+            1,
+        ),
+        (
+            "The Central Branch is affected.",
+            "Every location in the city is affected.",
+            1,
+        ),
+        (
+            "Only Central Branch is unavailable.",
+            "All city locations are unavailable.",
+            1,
+        ),
+        (
+            "The closure applies to Central Branch.",
+            "The closure applies citywide.",
+            1,
+        ),
+        (
+            "One service location is closed.",
+            "All service locations are closed.",
+            1,
+        ),
+
+        # No drift
+        (
+            "Central Service Branch is temporarily closed.",
+            "Central Service Branch is temporarily closed.",
+            0,
+        ),
+        (
+            "The Central Branch is affected.",
+            "The Central Branch is affected.",
+            0,
+        ),
+        (
+            "Only Central Branch is unavailable.",
+            "Only Central Branch is unavailable.",
+            0,
+        ),
+        (
+            "The closure applies to Central Branch.",
+            "The closure applies to Central Branch.",
+            0,
+        ),
+        (
+            "One service location is closed.",
+            "One service location is closed.",
+            0,
+        ),
+    ],
+
+    "context": [
+        # Drift
+        (
+            "Central Branch is temporarily closed for maintenance and will reopen at 12 PM.",
+            "Central Branch is closed.",
+            1,
+        ),
+        (
+            "The branch is closed from 8 AM to 12 PM due to maintenance.",
+            "The branch is closed.",
+            1,
+        ),
+        (
+            "The branch will reopen at 12 PM.",
+            "The branch is closed.",
+            1,
+        ),
+        (
+            "Other branches remain operational.",
+            "The branches are closed.",
+            1,
+        ),
+        (
+            "Residents can use other branches before 12 PM.",
+            "Residents cannot get service anywhere.",
+            1,
+        ),
+
+        # No drift
+        (
+            "Central Branch is temporarily closed for maintenance and will reopen at 12 PM.",
+            "Central Branch is temporarily closed for maintenance and will reopen at 12 PM.",
+            0,
+        ),
+        (
+            "The branch is closed from 8 AM to 12 PM due to maintenance.",
+            "The branch is closed from 8 AM to 12 PM due to maintenance.",
+            0,
+        ),
+        (
+            "The branch will reopen at 12 PM.",
+            "The branch will reopen at 12 PM.",
+            0,
+        ),
+        (
+            "Other branches remain operational.",
+            "Other branches remain operational.",
+            0,
+        ),
+        (
+            "Residents can use other branches before 12 PM.",
+            "Residents can use other branches before 12 PM.",
+            0,
+        ),
+    ],
+}
 
 
-class ClaimDriftModel:
-    """Small TF-IDF + Logistic Regression classifier."""
+class DriftClassifier:
+    """Small binary TF-IDF + Logistic Regression classifier."""
 
-    def __init__(self) -> None:
+    def __init__(self, examples):
         self.vectorizer = TfidfVectorizer(
             lowercase=True,
             ngram_range=(1, 2),
-            max_features=500,
+            max_features=1000,
             sublinear_tf=True,
         )
 
@@ -73,44 +278,86 @@ class ClaimDriftModel:
             class_weight="balanced",
         )
 
-        self._train()
+        texts = []
+        labels = []
 
-    def _train(self) -> None:
-        texts = [item[0] for item in TRAINING_DATA]
-        labels = [item[1] for item in TRAINING_DATA]
+        for official, rumor, label in examples:
+            texts.append(self._pair_text(official, rumor))
+            labels.append(label)
 
-        X = self.vectorizer.fit_transform(texts)
-        self.model.fit(X, labels)
+        features = self.vectorizer.fit_transform(texts)
+        self.model.fit(features, labels)
 
-    def predict(self, text: str) -> Dict[str, float | str]:
-        """Return the dominant drift category and probability."""
+    @staticmethod
+    def _pair_text(official: str, rumor: str) -> str:
+        """
+        Represent the relationship between the official statement
+        and the rumor as a single ML input.
+        """
+        return (
+            f"OFFICIAL_CLAIM {official} "
+            f"RUMOR_CLAIM {rumor}"
+        )
 
-        if not text or not text.strip():
-            return {
-                "category": "normal",
-                "confidence": 0.0,
-            }
+    def predict(
+        self,
+        official: str,
+        rumor: str,
+    ) -> float:
+        """Return probability that this drift type exists."""
 
-        X = self.vectorizer.transform([text])
+        if not official or not rumor:
+            return 0.0
 
-        probabilities = self.model.predict_proba(X)[0]
-        classes = self.model.classes_
+        pair = self._pair_text(official, rumor)
+        features = self.vectorizer.transform([pair])
 
-        best_index = probabilities.argmax()
+        probabilities = self.model.predict_proba(features)[0]
 
-        return {
-            "category": str(classes[best_index]),
-            "confidence": round(
-                float(probabilities[best_index]),
-                4,
-            ),
-        }
+        # Probability of class 1 = drift.
+        class_to_probability = dict(
+            zip(
+                self.model.classes_,
+                probabilities,
+            )
+        )
+
+        return round(
+            float(class_to_probability.get(1, 0.0)),
+            4,
+        )
 
 
-# Load once when the application starts.
-_model = ClaimDriftModel()
+# ----------------------------------------------------------------------------- #
+# Build the four lightweight classifiers once at startup.
+# ----------------------------------------------------------------------------- #
+
+_MODELS: Dict[str, DriftClassifier] = {
+    category: DriftClassifier(examples)
+    for category, examples in TRAINING_DATA.items()
+}
 
 
-def predict_drift(text: str) -> Dict[str, float | str]:
-    """Public prediction function."""
-    return _model.predict(text)
+def predict_drift(
+    official_claim: str,
+    rumor_claim: str,
+) -> Dict[str, float]:
+    """
+    Compare an official claim with a rumor and return
+    independent drift probabilities.
+    """
+
+    scores = {
+        category: model.predict(
+            official_claim,
+            rumor_claim,
+        )
+        for category, model in _MODELS.items()
+    }
+
+    scores["overall"] = round(
+        max(scores.values()),
+        4,
+    )
+
+    return scores
